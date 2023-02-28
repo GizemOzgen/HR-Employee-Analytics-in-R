@@ -1,0 +1,374 @@
+---
+title: "CENG 4515 DATA SCIENCE AND ANALYTICS"
+output: html_document
+date: "2023-01-08"
+author: "Gizem Özgen - Gökhan Yasin Kaya"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Importing libraries
+
+```{r echo=T, results='hide', warning=FALSE, message=FALSE}
+library(readxl)
+library(dplyr)
+library(plyr)
+library(ggplot2) 
+library(tidyverse)
+library(moments)
+library(forcats) 
+library(gridExtra)
+library(RColorBrewer)
+library(rsample)    
+library(Metrics)
+library(corrplot)
+library(caret)
+library(factoextra)
+library(ggpubr)
+library(devtools)
+install_github("vqv/ggbiplot")
+library(ggbiplot)
+library(jtools)
+library(broom.mixed)
+library(cluster)
+```
+
+### 1. Please find your original dataset or datasets; and describe your data in the first step.
+
+Our dataset is a multinational company Human Resources (HR) data which includes employee attributes. This dataset contains 14999 unique employee and 11 attribute of employees such as:
+
+Emp_id = Employee Id
+satisfaction_level = Satisfaction of Employee from Company
+last_evaluation  = Employee Id
+number_project  = Number of the projects that an employee works
+average_montly_hours   = Average Monthly hours of an employee
+Work_accident  = True False value of question: "Is employeee had an accident?"
+left = True False value of question: "Is employeee left?"
+promotion_last_5years = True False value of question: "Is employeee get a promotion in last 5 years?"
+Department = Department of the Employee
+salary  = Salary of the Employee (as: low,medium,high)
+
+```{r cars}
+data <- read_excel("HR_Employee_Data.xlsx")
+glimpse(data,width = getOption("width"))
+```
+
+### 2. Use “Exploratory data analysis”. Write down your comments.
+
+Firstly, We chech our data to having a NA value or not.
+
+```{r}
+sum(is.na(data))
+```
+
+Secondly, We transform categorical character columns into factors and scale the integers between 0-1
+
+```{r}
+transformedData <- preProcess(data, method = "range")
+data <- predict(transformedData, data)
+data <- transform(data, salary = as.integer(as.factor(salary)))
+
+```
+
+Then, We drop the "Emp_Id" column (no significant value).
+```{r}
+data <- data%>% 
+  select(-c(Emp_Id))
+```
+
+After that, Create a datafile to better visualise most departments.
+```{r}
+# Group data by department and summarize the count of each department
+top_salaries <- data %>% 
+  group_by(Department) %>% 
+  dplyr::summarize(count = n()) %>% 
+  arrange(desc(count))
+
+# Select the top 5 departments by count
+top_5_data <- top_salaries[1:5, ]
+
+```
+
+Lastly, We print our dataset again.
+```{r}
+glimpse(data,width = getOption("width"))
+```
+
+### 3. Use some “visualization techniques” and talk about your data further
+
+```{r}
+employment_type_count<-data%>%
+group_by(Department)%>%
+dplyr::summarise(count=n())%>%
+mutate(Percent = paste(Department,":",round(100*count/sum(count)), "%"))%>%
+mutate(prop = count / sum(count) *100)
+
+ggplot(employment_type_count, aes(x="", y=prop, fill=Percent)) +
+  geom_bar(stat="identity", width=1, color="black") +
+  coord_polar("y", start=0) +
+  theme_void()
+
+```
+
+This graph contains all departments. It shows the percentages of employees by each department.
+
+```{r}
+ggplot(top_5_data) +
+  geom_col(aes(x = reorder(Department, -count), y = count, fill = Department)) +
+  geom_text(aes(x = reorder(Department, -count), y = count, label = count), vjust = 1.5, colour = "white", position = position_dodge(.9), size = 5) +
+  ggtitle("Number of different positions in data science") +
+  xlab("") +
+  ylab("") +
+  theme(axis.text.x = element_text(angle = 30, size = 10, color = "black", hjust = 0.5)) +
+  theme(legend.position = "none")
+
+```
+
+There are 5 departments with the highest number of employees in the company. Based on this graph, the department with the most employees is the sales department, followed by the technical department.
+
+
+### 4. Check your data for multicollinearity.
+
+```{r}
+data_cor<-data[, c(1:8, 10)]
+cor <- cor(data_cor)
+corrplot(cor, method = 'color')
+```
+
+In this correlation matrix, the darker the color, the stronger correlation is. We can say that average_monthly_hours and number_project has positive correlation, satisfaction_level and left has a negative but not strong correlation.
+
+##5. Apply PCA
+```{r}
+datapca <- prcomp(data_cor, scale=TRUE,center = TRUE)
+#reverse the signs
+datapca$rotation <- -1*datapca$rotation #eigenvectors in R point in the negative direction by default
+head(datapca$rotation)
+summary(datapca)
+```
+
+We can see that the first principal component (PC1) has high values for number_project and average_montly_hours which indicates that this principal component describes the most variation in these variables.We can also see that the second principal component (PC2) has a high value for satisfaction_level, which indicates that this principle component places most of its emphasis on satisfaction levels of employees.
+
+```{r}
+fviz_eig(datapca, addlabels=TRUE, barfill = "red")
+```
+
+We can see that PC1 has the highest variance with 20.7%. PC1 and PC2 has the highest variance rates so we will use these two.
+
+```{r}
+ggbiplot(datapca,labels.size = 0,alpha=0.1,ellipse = TRUE,groups = data$left)
+```
+
+This biplot with labels for the data points removed and made semi-transparent (alpha=0.1) so that it would not appear confusing. It also includes ellipse overlays and groups the data points by left variable.
+
+### 5.C. Final comments
+
+We noticed that the eigenvalues of the first three components were greater than 1, which means that they explain a significant portion of the variance in the data. This suggests that we can reduce the number of variables from 10 to 3 without losing too much information. In the ggbiplot the dark datapoints represent employees who has not left the company and salary, last_evaluation, number_project and time_spent_company effects emplyees staying in the company.
+
+## 6.Apply Logistic Regression or Regression
+
+### 6.A. Use appropriate functions and arguments
+
+We split our dataset into two tables, trainSet and testSet, with 80% and 20% of the data, respectively.
+
+```{r}
+set.seed(241)
+trainIndex <- createDataPartition(data$left, p = .8, list = FALSE)
+
+trainSet <- data[trainIndex, ]
+testSet <- data[-trainIndex, ]
+modelLogistic <- glm(left~.,family="binomial", data=trainSet)
+summary(modelLogistic)
+
+```
+
+This is the output of a generalized linear model with a binomial family. The coefficients show the relationship between the different features and the target variable "left". The p-values show the significance of each feature in relation to the target variable.
+
+```{r}
+prob <- predict(modelLogistic , testSet ,type="response")
+pred <- ifelse(prob > 0.5, 1, 0)
+matrixLog <- confusionMatrix(
+  factor(pred, levels = c(0,1)),
+  factor(testSet$left, levels = c(0,1))
+)
+matrixLog
+
+```
+
+This is the output of a generalized linear model with a binomial family. The coefficients show the relationship between the different features and the target variable "left". The p-values show the significance of each feature in relation to the target variable.
+
+### 6.B. Use visualization techniques for Regression
+
+```{r}
+plot_summs(modelLogistic)
+```
+
+### 6.C Final Comments
+
+Linear regression model is performing moderately well, with an accuracy of 0.7729 and a kappa of 0.2553. It is showing good sensitivity, with a score of 0.9255, but relatively low specificity, with a score of 0.2883. Model Logistic graph plots the predicted probability of success for each column.
+
+##7. Apply at least 2 Clustering Techniques
+
+### 7.A. Describe the reason you choose those 2 techniques.
+
+In the result of PCA's, We observed that our dataset contains mostly similar values that are close to each other. In based of a distance measure we chose to use K-means to group our data into clusters. In terms of clustering large number of data points like our dataset, We choose Hierarchical clustering to get better results in larger sets.
+
+### 7.1 K-Means Algorithm Application
+
+#### 7.1.A.X Use appropriate functions and arguments
+
+```{r}
+summary(datapca)
+```
+
+We use the PCA results for K-Means Clustering.
+
+#### 7.1.B Use visualization techniques
+
+```{r}
+screeplot(datapca, type = "l", npcs = 5, main = "Screeplot of the first 5 PCs")
+abline(h = 1, col="red", lty="longdash")
+legend("topright", legend=c("Eigenvalue = 1"),
+       col=c("red"), lty=5, cex=0.6)
+```
+
+The graph shows first 5 PCs. There are 3 PCs above the line so we can make 3 clusters.
+
+```{r}
+plot(datapca$x[,1],datapca$x[,2], xlab="PC1 (20.7%)", ylab = "PC2 (16.3%)", main = "PC1 / PC2 - plot")
+
+```
+
+This is PC1 and PC2 plot. We will use this plot to visualize our clusters.
+
+```{r}
+set.seed(101)
+km <- kmeans(data[,1:8,10], 2)
+plot(datapca$x[,1],datapca$x[,2], xlab="PC1 (20.7%)", 
+     ylab = "PC2 (16.3%)", 
+     main = "PC1 / PC2 - plot", 
+     col=km$cluster)
+```
+
+If we use 2 clusters the plot would look like that. The difference between two clusters is not that noticable.
+
+```{r}
+km$centers
+```
+
+```{r}
+set.seed(102)
+km <- kmeans(data[,1:8,10], 3)
+plot(datapca$x[,1],datapca$x[,2], xlab="PC1 (20.7%)", 
+     ylab = "PC2 (16.3%)", 
+     main = "PC1 / PC2 - plot", 
+     col=km$cluster)
+```
+
+This is the plot when we make 3 clusters.
+
+```{r}
+table(km$cluster, data$left)
+km <- kmeans(data[,1:5], 3)
+fviz_cluster(km, data = data[,1:8,10])
+
+```
+
+Here is a better visualization of 3 clusters. As we can see this is more pleasant. Also we have a table output. 1 represents employees who left the company. In cluster two there are employees who left the company, in cluster 3 there are only the employees who still works there.
+
+#### 7.1.C Final comments
+
+The Department column was not included when the PCA was performed to the data. The center points were established, and k was set to 3. The center points were clustered using the kmeans algorithm, which produced the blue, red, and green clusters. The graphic illustrates the visualization of these clusters.
+
+### 7.2. Hierarchical Algorithm Application
+
+#### 7.2.A. Use appropriate functions and arguments
+
+```{r}
+distance <- dist(data[, c(1:6, 8, 10)], method = "euclidean")
+cluster_data <- hclust(distance, method = "ward.D")
+plot(cluster_data)
+rect.hclust(cluster_data, k=3)
+```
+
+Each leaf at the bottom of the dendrogram represents an observation in the original dataset. As we move up the dendrogram from the bottom, observations that are similar to each other are fused together into a branch. We made 3 clusters with hierarchical clustering.
+
+#### 7.2.B. Use visualization techniques
+
+```{r}
+sm_hc <- cutree(cluster_data, 3)
+clusplot(data[, c(1:6, 8, 10)], clus = sm_hc, lines = 0, shade = TRUE, color = TRUE, labels = 2, plotchar = FALSE, span = TRUE)
+```
+
+In this plot we can see the 3 clusters. Since we have a large data, the numbers do not really show. 
+
+#### 7.2.C. Final comments
+
+We performed hierarchical clustering on our data set. We calculated the distance matrix using Euclidean distance and used this matrix to perform hierarchical clustering. We then plotted the resulting clustering object and drew rectangles around the clusters which were specified as 3. We also cut the hierarchical clustering tree into 3 clusters and created a plot showing these clusters, where the shading and color coding indicated the membership of each point.
+
+### 7.B. Compare the results you have found in 7.1 and 7.2
+
+We made 3 clusters in each techniques. We can see by the visualization results, k-means clustering was more successful.
+
+## 8. Apply at least 2 Classification Techniques.
+
+### 8.A. Describe the reason you choose those 2 techniques.
+
+We’ll use the output of step 6 here, so We’re skipping 8.2 here.
+
+Decision tree classification is a powerful and popular machine learning algorithm that is used to classify data.It is a simple yet powerful approach that can be used to build complex models. Decision tree classification is advantageous because it is easy to interpret and can handle both numerical and categorical data. Additionally, decision trees can be used to perform feature selection, which is useful for identifying important features from a large dataset.
+
+#### 8.1. Decision Tree Algorithm Application
+
+#### 8.1.A Use appropriate functions and arguments
+
+```{r}
+model <- rpart(formula = left ~ ., data = trainSet)
+prob2 <- predict(model , testSet ,type="vector")
+
+```
+
+After creating model, we check the levels are they even or not.
+
+```{r}
+levels(as.factor(prob2))
+```
+
+```{r}
+levels(as.factor(testSet$left))
+```
+
+We observed that are levels are not even. In order to  categorize probilities according 1 or 0 (same levels from testSet). We calculate the average value of the probibility levels and get 0.36.  
+
+```{r}
+pred2 <- ifelse(prob > 0.36, 1, 0)
+```
+
+If the prediction value higher from 0.36 turn into 1 else turn into 0  
+
+```{r}
+matrixLog2 <- confusionMatrix(
+  factor(pred2, levels = c(0,1)),
+  factor(testSet$left, levels = c(0,1)))
+
+matrixLog2
+
+```
+
+#### 8.1.B Use visualization techniques
+
+```{r}
+rpart.plot(model, box.palette="BuGn", shadow.col="gray", nn=TRUE)
+```
+
+#### 8.1.C Final comments
+
+This conclusion shows a good accuracy score of 80.53%, indicating that the decision tree model was quite successful in predicting the correct classes. The Kappa score of 0.4906 is also good and shows the model is not just predicting the majority class.
+
+### 8.B. Compare the results you have found in 8.1 and 8.2
+
+The Decision Tree model appears to be more accurate overall, achieving an accuracy of 0.8053 compared to 0.7729 for the Logistic Regression model. The Decision Tree model also has higher specificity than the Logistic Regression model. However, the Logistic Regression model has higher sensitivity, meaning that it is better at identifying positive cases.
+
+
+
